@@ -14,17 +14,28 @@ TIMEFRAMES = {
 }
 RISK_PERCENT = 1  # 1% tài khoản mỗi lệnh
 
-# 2. KHỞI TẠO KẾT NỐI MT5
+# 2. THÔNG TIN TÀI KHOẢN DEMO EXNESS
+ACCOUNT_NUMBER = 204987040
+SERVER = "Exness-MT5Trial7"
+PASSWORD = "87u3D1$6"  # Thay bằng mật khẩu thực
+
+# 3. KHỞI TẠO KẾT NỐI MT5
 def initialize_mt5():
     if not mt5.initialize():
         print("Khởi tạo MT5 thất bại, lỗi:", mt5.last_error())
         return False
     
-    print("Kết nối MT5 thành công!")
-    print("Phiên bản MT5:", mt5.version())
-    return True
+    authorized = mt5.login(ACCOUNT_NUMBER, password=PASSWORD, server=SERVER)
+    if authorized:
+        account_info = mt5.account_info()
+        print(f"\n✅ Kết nối thành công tài khoản #{ACCOUNT_NUMBER}")
+        print(f"💰 Balance: {account_info.balance:.2f} USD | Đòn bẩy: 1:{account_info.leverage}")
+        return True
+    else:
+        print("❌ Đăng nhập thất bại, lỗi:", mt5.last_error())
+        return False
 
-# 3. LẤY DỮ LIỆU GIÁ
+# 4. LẤY DỮ LIỆU GIÁ
 def get_ohlcv(symbol, timeframe, n_candles):
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, n_candles)
     df = pd.DataFrame(rates)
@@ -32,15 +43,15 @@ def get_ohlcv(symbol, timeframe, n_candles):
     df.set_index('time', inplace=True)
     return df
 
-# 4. TÍNH TOÁN CHỈ BÁO
+# 5. TÍNH TOÁN CHỈ BÁO
 def calculate_indicators(df):
-    # EMA Trend (4H/1H)
+    # EMA Trend
     df['ema_fast'] = ta.trend.ema_indicator(df['close'], window=20)
     df['ema_slow'] = ta.trend.ema_indicator(df['close'], window=50)
     df['trend_up'] = df['ema_fast'] > df['ema_slow']
     df['trend_down'] = df['ema_fast'] < df['ema_slow']
     
-    # WaveTrend LB (15M)
+    # WaveTrend LB
     hlc3 = (df['high'] + df['low'] + df['close']) / 3
     esa = ta.trend.ema_indicator(hlc3, window=10)
     d = ta.trend.ema_indicator(abs(hlc3 - esa), window=10)
@@ -52,7 +63,7 @@ def calculate_indicators(df):
     df['wt_cross_up'] = (wt1 > wt2) & (wt1.shift(1) <= wt2.shift(1)) & (wt1 < -60)
     df['wt_cross_down'] = (wt1 < wt2) & (wt1.shift(1) >= wt2.shift(1)) & (wt1 > 60)
     
-    # EVEREX Flow (15M)
+    # EVEREX Flow
     flow = df['close'].diff() * df['volume']
     bull_flow = flow.clip(lower=0).rolling(window=5).mean()
     bear_flow = (-flow.clip(upper=0)).rolling(window=5).mean()
@@ -62,11 +73,10 @@ def calculate_indicators(df):
     
     return df
 
-# 5. QUẢN LÝ VỐN
+# 6. QUẢN LÝ VỐN
 def calculate_position_size():
     account_info = mt5.account_info()
     if account_info is None:
-        print("Không lấy được thông tin tài khoản")
         return 0.1  # Lot mặc định
     
     balance = account_info.balance
@@ -75,13 +85,17 @@ def calculate_position_size():
     
     risk_amount = balance * RISK_PERCENT / 100
     lot_size = risk_amount / (price * 100000)  # Đối với EURUSD
-    return round(lot_size, 2)
+    return round(max(lot_size, 0.01), 2)  # Tối thiểu 0.01 lot
 
-# 6. GỬI LỆNH
+# 7. GỬI LỆNH
 def place_order(side):
+    if not mt5.terminal_info().trade_allowed:
+        print("⚠️ Tài khoản không cho phép giao dịch!")
+        return None
+    
     symbol_info = mt5.symbol_info(SYMBOL)
     if symbol_info is None:
-        print(f"Không tìm thấy thông tin {SYMBOL}")
+        print(f"❌ Không tìm thấy thông tin {SYMBOL}")
         return None
     
     lot_size = calculate_position_size()
@@ -97,7 +111,7 @@ def place_order(side):
         "price": price,
         "deviation": deviation,
         "magic": 2023,
-        "comment": f"WT_LB+EVEREX {side}",
+        "comment": f"WT+EVEREX {side}",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
@@ -105,19 +119,24 @@ def place_order(side):
     result = mt5.order_send(request)
     
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        print(f"Lỗi đặt lệnh {side}:", result.comment)
+        print(f"❌ Lỗi đặt lệnh {side}:", result.comment)
     else:
-        print(f"Đã đặt lệnh {side.upper()} | Giá: {price} | Lot: {lot_size}")
+        print(f"✅ Đã đặt lệnh {side.upper()} {SYMBOL}")
+        print(f"   ▪️Giá: {price:.5f} | Lot: {lot_size:.2f}")
+        print(f"   ▪️Balance: {mt5.account_info().balance:.2f} USD")
     
     return result
 
-# 7. KIỂM TRA VỊ THẾ
+# 8. KIỂM TRA VỊ THẾ
 def has_open_position():
     positions = mt5.positions_get(symbol=SYMBOL)
     return len(positions) > 0 if positions else False
 
-# 8. LOGIC GIAO DỊCH
+# 9. LOGIC GIAO DỊCH CHÍNH
 def trading_strategy():
+    print("\n" + "="*50)
+    print(f"🔄 Đang phân tích {SYMBOL} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
     # Lấy dữ liệu đa khung thời gian
     df_4h = get_ohlcv(SYMBOL, TIMEFRAMES['4h'], 500)
     df_1h = get_ohlcv(SYMBOL, TIMEFRAMES['1h'], 500)
@@ -146,37 +165,55 @@ def trading_strategy():
     short_condition = (trend_4h_down and trend_1h_down and 
                        last_15m['wt_cross_down'] and last_15m['flow_down'])
     
-    # Thực thi lệnh (chỉ giao dịch khi không có vị thế mở)
+    # Thực thi lệnh
     if not has_open_position():
         if long_condition:
+            print("\n🎯 TÍN HIỆU MUA:")
+            print(f"   ▪️Xu hướng 4H: {'UPTREND' if trend_4h_up else 'DOWNTREND'}")
+            print(f"   ▪️Xác nhận 1H: {'BULLISH' if trend_1h_up else 'BEARISH'}")
+            print(f"   ▪️WT_LB: {last_15m['wt_cross_up']} | EVEREX: {last_15m['flow_up']}")
             place_order('buy')
+            
         elif short_condition:
+            print("\n🎯 TÍN HIỆU BÁN:")
+            print(f"   ▪️Xu hướng 4H: {'UPTREND' if trend_4h_up else 'DOWNTREND'}")
+            print(f"   ▪️Xác nhận 1H: {'BULLISH' if trend_1h_up else 'BEARISH'}")
+            print(f"   ▪️WT_LB: {last_15m['wt_cross_down']} | EVEREX: {last_15m['flow_down']}")
             place_order('sell')
+        else:
+            print("🔍 Không tìm thấy tín hiệu giao dịch phù hợp")
+    else:
+        print("⏳ Đang có vị thế mở, chờ tín hiệu đóng lệnh")
 
-# 9. VÒNG LẶP CHÍNH
+# 10. VÒNG LẶP CHÍNH
 def run_bot():
-    print("=== HỆ THỐNG GIAO DỊCH ĐA KHUNG THỜI GIAN ===")
-    print(f"Cặp: {SYMBOL} | Khung: 4H-1H-15M")
-    print(f"Chiến lược: WT_LB + EVEREX + EMA Trend")
+    print("="*50)
+    print("🚀 HỆ THỐNG GIAO DỊCH TỰ ĐỘNG")
+    print(f"📊 Cặp: {SYMBOL} | Khung: 4H-1H-15M")
+    print(f"📈 Chiến lược: WT_LB + EVEREX + EMA Trend")
+    print(f"💵 Tài khoản: #{ACCOUNT_NUMBER} | Server: {SERVER}")
+    print("="*50)
     
     while True:
         try:
-            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            print(f"\n[{now}] Đang phân tích...")
-            
             trading_strategy()
             
             # Chờ đến phút thứ 0, 15, 30, 45 mỗi giờ
             sleep_time = 60 * 15 - (time.time() % (60 * 15))
+            print(f"\n⏳ Chờ {int(sleep_time/60)} phút tới...")
             time.sleep(sleep_time)
             
         except Exception as e:
-            print(f"Lỗi: {e}")
+            print(f"❌ CÓ LỖI XẢY RA:", str(e))
             time.sleep(60)
 
+# KHỞI CHẠY CHƯƠNG TRÌNH
 if __name__ == "__main__":
     if initialize_mt5():
         try:
             run_bot()
+        except KeyboardInterrupt:
+            print("\n🛑 Dừng hệ thống...")
         finally:
             mt5.shutdown()
+            print("✅ Đã đóng kết nối MT5")
