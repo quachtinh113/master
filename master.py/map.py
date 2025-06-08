@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 
 # 1. CẤU HÌNH HỆ THỐNG
-SYMBOL = "EURUSD"
+SYMBOL = "BTCUSDm"
 TIMEFRAMES = {
     '4h': mt5.TIMEFRAME_H4,
     '1h': mt5.TIMEFRAME_H1,
