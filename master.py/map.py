@@ -6,7 +6,7 @@ import pandas as pd
 import ta
 
 # 1. CẤU HÌNH HỆ THỐNG (QUANT)
-SYMBOL = "EURUSD"
+SYMBOL = "USDCHF"
 TIMEFRAMES = {
     "4h": mt5.TIMEFRAME_H4,
     "1h": mt5.TIMEFRAME_H1,
@@ -25,6 +25,17 @@ FLOW_WINDOW = 5
 VOLATILITY_THRESHOLD = 0.0007  # ATR(14)/close tối thiểu
 MAX_SL_PIPS = 40
 MIN_LOT = 0.01
+
+
+def estimate_pip_value_per_lot(symbol_info):
+    tick_value = symbol_info.trade_tick_value if symbol_info else 0.0
+    tick_size = symbol_info.trade_tick_size if symbol_info else 0.0
+
+    if tick_value and tick_size:
+        return tick_value * ((symbol_info.point * 10) / tick_size)
+
+    # Fallback gần đúng nếu broker không cung cấp đầy đủ tick metadata.
+    return 10.0
 
 
 # 2. KHỞI TẠO KẾT NỐI MT5
@@ -101,7 +112,7 @@ def calculate_position_size(stop_loss_pips):
     stop_loss_pips = max(1.0, min(stop_loss_pips, MAX_SL_PIPS))
     risk_amount = account_info.balance * RISK_PERCENT / 100
 
-    pip_value_per_lot = 10.0  # xấp xỉ cho EURUSD
+    pip_value_per_lot = estimate_pip_value_per_lot(symbol_info)
     lot_size = risk_amount / (stop_loss_pips * pip_value_per_lot)
 
     lot_step = symbol_info.volume_step if symbol_info.volume_step else 0.01
